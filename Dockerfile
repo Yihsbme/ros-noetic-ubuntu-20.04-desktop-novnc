@@ -1,5 +1,7 @@
 FROM ubuntu:20.04
 
+LABEL maintainer="docker-ubuntu-ros-novnc"
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV USER=ubuntu \
     PASSWORD=ubuntu \
@@ -99,20 +101,27 @@ RUN wget -q -O- https://packagecloud.io/dcommander/turbovnc/gpgkey | gpg --dearm
     rm -rf /var/lib/apt/lists/*
 
 #======================================
-# 6. Configure SSH
+# 5. Configure SSH
 #======================================
 RUN mkdir -p /var/run/sshd && \
     sed -i 's/#*PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config && \
     sed -i 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' /etc/pam.d/sshd
 
 #======================================
-# 7. Create startup scripts
+# 6. Create startup scripts
 #======================================
 RUN mkdir -p /docker_config
 
 # Create start_novnc.sh
 RUN echo '#!/bin/sh\n\
 VNC_RESOLUTION=${VNC_RESOLUTION:-1920x1080}\n\
+# Ensure .vnc directory exists with correct permissions\n\
+if [ ! -d "/home/$USER/.vnc" ]; then\n\
+    mkdir -p /home/$USER/.vnc\n\
+    chown $UID:$GID /home/$USER/.vnc\n\
+    chmod 700 /home/$USER/.vnc\n\
+fi\n\
+# Set password for TurboVNC\n\
 if [ ! -f "/home/$USER/.vnc/passwd" ]; then\n\
     su $USER -c "echo -e \""$PASSWORD"\n"$PASSWORD"\ny\n\" | /opt/TurboVNC/bin/vncpasswd"\n\
 fi\n\
@@ -128,7 +137,7 @@ tail -f /home/$USER/.vnc/*.log' > /docker_config/start_novnc.sh && \
     chmod +x /docker_config/start_novnc.sh
 
 #======================================
-# 8. Create entrypoint script
+# 7. Create entrypoint script
 #======================================
 RUN echo '#!/bin/sh\n\
 ## Initialize environment\n\
@@ -145,6 +154,10 @@ if [ ! -f "/docker_config/init_flag" ]; then\n\
     chsh -s /bin/bash $USER\n\
     mkdir -p /run/user/$UID\n\
     chown $GID:$UID /run/user/$UID\n\
+    # Create .vnc directory with correct permissions\n\
+    mkdir -p /home/$USER/.vnc\n\
+    chown $UID:$GID /home/$USER/.vnc\n\
+    chmod 700 /home/$USER/.vnc\n\
     if [ -f "/docker_config/env_init.sh" ]; then\n\
         bash /docker_config/env_init.sh\n\
     fi\n\
@@ -158,17 +171,12 @@ if [ -f "/docker_config/custom_startup.sh" ]; then\n\
     bash /docker_config/custom_startup.sh\n\
 fi\n\
 /usr/sbin/sshd\n\
-if [ ! -z ${DISABLE_HTTPS+x} ]; then\n\
-    su $USER -c "code-server --bind-addr=0.0.0.0:5000 &"\n\
-else\n\
-    su $USER -c "code-server --cert $HTTPS_CERT --cert-key $HTTPS_CERT_KEY --bind-addr=0.0.0.0:5000 &"\n\
-fi\n\
 echo "start novnc"\n\
 bash /docker_config/start_novnc.sh' > /docker_config/entrypoint.sh && \
     chmod +x /docker_config/entrypoint.sh
 
 #======================================
-# 9. Expose ports and set entrypoint
+# 8. Expose ports and set entrypoint
 #======================================
 EXPOSE 22 4000
 
