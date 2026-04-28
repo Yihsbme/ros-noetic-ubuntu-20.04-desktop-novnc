@@ -158,6 +158,9 @@ if [ ! -f "/docker_config/init_flag" ]; then\n\
     mkdir -p /home/$USER/.vnc\n\
     chown $UID:$GID /home/$USER/.vnc\n\
     chmod 700 /home/$USER/.vnc\n\
+    # Fix home directory permissions for XFCE\n\
+    chown -R $UID:$GID /home/$USER\n\
+    chmod 755 /home/$USER\n\
     if [ -f "/docker_config/env_init.sh" ]; then\n\
         bash /docker_config/env_init.sh\n\
     fi\n\
