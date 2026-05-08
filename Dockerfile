@@ -55,7 +55,7 @@ RUN VULKAN_API_VERSION=$(dpkg -s libvulkan1 | grep -oP 'Version: [0-9|\.]+' | gr
 }" > /etc/vulkan/icd.d/nvidia_icd.json
 
 #======================================
-# 2. Install desktop environment & D-Bus & Sogou Pinyin Input Method
+# 2. Install desktop environment & D-Bus & Rime Input Method
 #======================================
 RUN apt-get update && \
     add-apt-repository -y ppa:mozillateam/ppa && \
@@ -65,15 +65,10 @@ Pin: release o=LP-PPA-mozillateam\n\
 Pin-Priority: 1001" > /etc/apt/preferences.d/mozilla-firefox && \
     apt-get install -y xfce4 terminator fonts-wqy-zenhei pulseaudio ffmpeg firefox \
                        dbus dbus-x11 fcitx fcitx-config-gtk && \
-    # 安装搜狗拼音所需的额外依赖
-    apt-get install -y libqt5qml5 libqt5quick5 libqt5quickwidgets5 qml-module-qtquick2 \
-                       libgsettings-qt1 && \
-    # 下载并安装搜狗拼音 (版号: 2.4.0.3469，适配 Ubuntu 20.04)
-    wget -q -O /tmp/sogoupinyin.deb "https://ime.sogouimecdn.com/2023/06/08/1686216814642/sogoupinyin_2.4.0.3469_amd64.deb" && \
-    apt-get install -y /tmp/sogoupinyin.deb && \
-    # 修复可能缺失的依赖
-    apt-get install -f -y && \
-    rm -f /tmp/sogoupinyin.deb && \
+    # 安装 Rime 输入法引擎
+    apt-get install -y fcitx-rime && \
+    # 可选：安装中文字体增强 (已有 wqy-zenhei，再装一个更全的)
+    apt-get install -y fonts-noto-cjk && \
     rm -rf /var/lib/apt/lists/*
 
 # 确保 D-Bus 运行时目录存在
@@ -120,7 +115,7 @@ xset s off\n\
 export GTK_IM_MODULE=fcitx\n\
 export QT_IM_MODULE=fcitx\n\
 export XMODIFIERS=@im=fcitx\n\
-# 启动输入法 (搜狗拼音依赖 fcitx)\n\
+# 启动输入法 (Rime 依赖 fcitx)\n\
 fcitx -r &\n\
 # 通过 dbus-launch 启动桌面会话\n\
 dbus-launch --exit-with-session /usr/bin/startxfce4' > /opt/TurboVNC/bin/xstartup.turbovnc && \
