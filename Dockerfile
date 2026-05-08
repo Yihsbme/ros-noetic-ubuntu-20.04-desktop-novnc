@@ -16,6 +16,9 @@ ENV VGL_DISPLAY=egl
 ENV VNC_RESOLUTION=1920x1080
 ENV VNC_THREADS=2
 
+# REMOVED: 错误的环境变量 (指向宿主机 D-Bus)
+# ENV DBUS_SYSTEM_BUS_ADDRESS=unix:path=/host/run/dbus/system_bus_socket
+
 #======================================
 # 1. Install basic tools
 #======================================
@@ -52,21 +55,29 @@ RUN VULKAN_API_VERSION=$(dpkg -s libvulkan1 | grep -oP 'Version: [0-9|\.]+' | gr
 }" > /etc/vulkan/icd.d/nvidia_icd.json
 
 #======================================
-# 2. Install desktop environment
+# 2. Install desktop environment & D-Bus & Input method
 #======================================
+# ADD: 安装 dbus, dbus-x11 (D-Bus 必要组件)
+# ADD: 安装 fcitx 以及中文输入法支持
 RUN apt-get update && \
     add-apt-repository -y ppa:mozillateam/ppa && \
     mkdir -p /etc/apt/preferences.d && \
     echo "Package: firefox*\n\
 Pin: release o=LP-PPA-mozillateam\n\
 Pin-Priority: 1001" > /etc/apt/preferences.d/mozilla-firefox && \
-    apt-get install -y xfce4 terminator fonts-wqy-zenhei pulseaudio ffmpeg firefox && \
+    apt-get install -y xfce4 terminator fonts-wqy-zenhei pulseaudio ffmpeg firefox \
+                       dbus dbus-x11 fcitx fcitx-pinyin fcitx-config-gtk && \
     update-alternatives --set x-www-browser /usr/bin/firefox && \
     rm -rf /var/lib/apt/lists/*
 
-ENV DBUS_SYSTEM_BUS_ADDRESS=unix:path=/host/run/dbus/system_bus_socket
-RUN apt-get update && apt-get install -y pulseaudio && mkdir -p /var/run/dbus && \
-    rm -rf /var/lib/apt/lists/*
+# 确保 D-Bus 运行时目录存在
+RUN mkdir -p /var/run/dbus && \
+    chmod 755 /var/run/dbus
+
+# 设置输入法环境变量 (将在启动脚本中再次导出)
+ENV GTK_IM_MODULE=fcitx \
+    QT_IM_MODULE=fcitx \
+    XMODIFIERS=@im=fcitx
 
 #======================================
 # 3. Install ROS Noetic Desktop
@@ -97,7 +108,16 @@ RUN wget -q -O- https://packagecloud.io/dcommander/turbovnc/gpgkey | gpg --dearm
     mv -f "/opt/noVNC-${NOVNC_VERSION}" /opt/noVNC && \
     ln -snf /opt/noVNC/vnc.html /opt/noVNC/index.html && \
     git clone "https://github.com/novnc/websockify.git" /opt/noVNC/utils/websockify && \
-    echo "xset s off && /usr/bin/startxfce4" > /opt/TurboVNC/bin/xstartup.turbovnc && \
+    # MODIFY: 修改 xstartup，使用 dbus-launch 启动 Xfce
+    echo '#! /bin/sh\n\
+xset s off\n\
+export GTK_IM_MODULE=fcitx\n\
+export QT_IM_MODULE=fcitx\n\
+export XMODIFIERS=@im=fcitx\n\
+# 启动输入法\n\
+fcitx -r &\n\
+# 通过 dbus-launch 启动桌面会话\n\
+dbus-launch --exit-with-session /usr/bin/startxfce4' > /opt/TurboVNC/bin/xstartup.turbovnc && \
     rm -rf /var/lib/apt/lists/*
 
 #======================================
@@ -113,32 +133,52 @@ RUN mkdir -p /var/run/sshd && \
 RUN mkdir -p /docker_config
 
 # Create start_novnc.sh
+# MODIFY: 在启动 VNC 之前先启动系统 D-Bus 守护进程（提供系统总线）
+# MODIFY: 确保用户环境变量包含输入法相关变量
 RUN echo '#!/bin/sh\n\
 VNC_RESOLUTION=${VNC_RESOLUTION:-1920x1080}\n\
-# Ensure .vnc directory exists with correct permissions\n\
+\n\
+# 启动系统 D-Bus 守护进程（如果未运行）\n\
+if [ ! -e /var/run/dbus/system_bus_socket ]; then\n\
+    dbus-daemon --system --fork\n\
+fi\n\
+\n\
+# 确保 .vnc 目录存在并设置权限\n\
 if [ ! -d "/home/$USER/.vnc" ]; then\n\
     mkdir -p /home/$USER/.vnc\n\
     chown $UID:$GID /home/$USER/.vnc\n\
     chmod 700 /home/$USER/.vnc\n\
 fi\n\
-# Set password for TurboVNC\n\
+\n\
+# 设置 TurboVNC 密码\n\
 if [ ! -f "/home/$USER/.vnc/passwd" ]; then\n\
     su $USER -c "echo -e \""$PASSWORD"\n"$PASSWORD"\ny\n\" | /opt/TurboVNC/bin/vncpasswd"\n\
 fi\n\
+\n\
+# 清理锁文件\n\
 rm -rf /tmp/.X1000-lock /tmp/.X11-unix/X1000\n\
+\n\
+# 准备用户环境变量文件（供 dbus-launch 继承）\n\
+echo "export GTK_IM_MODULE=fcitx" >> /home/$USER/.bashrc\n\
+echo "export QT_IM_MODULE=fcitx" >> /home/$USER/.bashrc\n\
+echo "export XMODIFIERS=@im=fcitx" >> /home/$USER/.bashrc\n\
+\n\
 echo "Starting TurboVNC with resolution: $VNC_RESOLUTION"\n\
 su $USER -c "/opt/TurboVNC/bin/vncserver :1000 -rfbport 5900 -geometry $VNC_RESOLUTION"\n\
+\n\
 if [ ! -z ${DISABLE_HTTPS+x} ]; then\n\
     su $USER -c "/opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 4000 --heartbeat 10 &"\n\
 else\n\
     su $USER -c "/opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --ssl-only --cert $HTTPS_CERT --key $HTTPS_CERT_KEY --listen 4000 --heartbeat 10 &"\n\
 fi\n\
+\n\
 tail -f /home/$USER/.vnc/*.log' > /docker_config/start_novnc.sh && \
     chmod +x /docker_config/start_novnc.sh
 
 #======================================
-# 7. Create entrypoint script
+# 7. Create entrypoint script (unchanged except small addition)
 #======================================
+# MODIFY: 确保 /run/user/$UID 存在且权限正确 (D-Bus 需要)
 RUN echo '#!/bin/sh\n\
 ## Initialize environment\n\
 if [ ! -f "/docker_config/init_flag" ]; then\n\
@@ -154,6 +194,8 @@ if [ ! -f "/docker_config/init_flag" ]; then\n\
     chsh -s /bin/bash $USER\n\
     mkdir -p /run/user/$UID\n\
     chown $GID:$UID /run/user/$UID\n\
+    # 确保 DBus 运行时目录权限\n\
+    chown -R $UID:$GID /var/run/dbus 2>/dev/null || true\n\
     # Create .vnc directory with correct permissions\n\
     mkdir -p /home/$USER/.vnc\n\
     chown $UID:$GID /home/$USER/.vnc\n\
